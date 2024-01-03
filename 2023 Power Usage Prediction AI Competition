@@ -1,0 +1,142 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import os
+
+# Data Load
+train = pd.read_csv('train.csv')
+test = pd.read_csv('test.csv')
+sample = pd.read_csv('sample_submission.csv')
+info = pd.read_csv('building_info.csv')
+
+# Data Visualization
+kwh = train['전력소비량(kWh)']
+data = list(range(204000))
+px.scatter(x = data, y = kwh, title = '전력소비량(kWh) 산점도')
+
+# ARIMA Model
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+# ACF Plot
+plot_acf(train['전력소비량(kWh)'], lags=80)
+plt.show()
+
+# PACF Plot
+plot_pacf(train['전력소비량(kWh)'], lags=80)
+plt.show()
+
+adf_result = adfuller(train['전력소비량(kWh)'])
+print(f'ADF 통계: {adf_result[0]}')
+print(f'p값: {adf_result[1]}')
+
+# EDA
+
+train['일시'] = pd.to_datetime(train['일시'])
+train['hour'] = train.일시.dt.hour
+train['day'] = train.일시.dt.day
+train['month'] = train.일시.dt.month
+train['week'] = train.일시.dt.day_of_week
+train.head()
+
+test['일시'] = pd.to_datetime(test['일시'])
+test['hour'] = test.일시.dt.hour
+test['day'] = test.일시.dt.day
+test['month'] = test.일시.dt.month
+test['week'] = test.일시.dt.day_of_week
+test.head()
+
+train.isna().sum()
+
+
+# 1 Preprocessing
+# Missing Value
+train = train.fillna(0)
+
+
+drop_col = ['num_date_time', '일시', '일조(hr)', '일사(MJ/m2)', '전력소비량(kWh)']
+train_drop = train.drop(columns = drop_col)
+test = test[train_drop.columns]
+y = train['전력소비량(kWh)']
+
+# Correlation investigation
+mask=np.triu(train_drop.corr())
+plt.figure(figsize=(20,20))
+plt.rcParams['font.family'] = 'Malgun Gothic'
+plt.rcParams['axes.unicode_minus'] = False
+sns.heatmap(train_drop.corr(),annot=True,cmap='RdYlBu_r',fmt='.2f',linewidths=.5,mask=mask)
+plt.savefig("seaborn_plot.png")
+
+# 2 Label Encoding & Standard Scaler
+from sklearn.preprocessing import LabelEncoder
+col = train_drop.columns
+for i in col:
+    le = LabelEncoder()
+    train_drop[i] = le.fit_transform(train_drop[i])
+    test[i] = le.fit_transform(test[i])
+
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+scaler.fit_transform(train_drop)
+scaler.fit_transform(test)
+
+# 3 Train Test Split
+from sklearn.model_selection import train_test_split
+x_tr, x_val, y_tr, y_val = train_test_split(train_drop, y, test_size=0.3)
+
+# 4 Model Selection
+# RandomForest, XGBoost, LightGBM
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from sklearn.metrics import r2_score
+
+# RandomForest
+rf = RandomForestRegressor()
+rf.fit(x_tr, y_tr)
+pred_rf = rf.predict(x_val)
+
+# XGBoost
+xgb = XGBRegressor()
+xgb.fit(x_tr, y_tr)
+pred_xgb = xgb.predict(x_val)
+
+# lightgbm
+lgb = LGBMRegressor()
+lgb.fit(x_tr, y_tr)
+pred_lgb = lgb.predict(x_val)
+
+# r2 score Using
+def score(a, b):
+    return r2_score(a, b)
+
+# r2 score Visualization
+models = ['랜덤 포레스트', 'XGB', 'LightGBM']
+r2 = [score(y_val, pred_rf), score(y_val,pred_xgb), score(y_val, pred_lgb)]
+ans = pd.DataFrame({'model':models, '결정계수': r2})
+fig = px.bar(x=ans.model, y=ans.결정계수, title='결정계수 결과')
+fig.update_traces(texttemplate='%{y}', textposition="inside")
+fig.show()
+
+# Adjusted r2 score
+def adjusted_r_squared(a,b):
+	return 1 - (1-a)*(len(b)-1)/(len(b) - b.shape[1] - 1)
+models = ['랜덤 포레스트', 'XGB', 'LightGBM']
+adjusted_r2 = [adjusted_r_squared(r2[0], x_val), adjusted_r_squared(r2[1], x_val), adjusted_r_squared(r2[2], x_val)]
+ans = pd.DataFrame({'model':models, '수정된 결정계수': adjusted_r2})
+fig = px.bar(x=ans.model, y=ans['수정된 결정계수'], title='수정된 결정계수 결과')
+fig.update_traces(texttemplate='%{y}', textposition="inside")
+fig.show()
+
+#Random Forest Selection
+
+# Final Result
+pred = rf.predict(test)
+pd.DataFrame({'num_date_time':sample.num_date_time, 'answer':pred}).to_csv('2023 전력사용량 예측 AI 경진대회.csv', index=False)
+
+result = pd.read_csv('2023 전력사용량 예측 AI 경진대회.csv')
+result
+
+px.scatter(x = result.num_date_time, y = result.answer)
